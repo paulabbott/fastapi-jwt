@@ -47,7 +47,6 @@ def jwt_playground() -> str:
       <button id="loginBtn">Login</button>
       <button id="usersBtn">List users</button>
       <button id="protectedBtn">Call /protected</button>
-      <button id="decodeBtn">Decode JWT</button>
       <button id="clearBtn">Clear token</button>
     </div>
 
@@ -102,6 +101,23 @@ def jwt_playground() -> str:
         return JSON.parse(json);
       }
 
+      function refreshDecodedFromToken() {
+        const token = tokenEl.value.trim();
+        if (!token) {
+          decodedEl.value = "";
+          localStorage.removeItem(TOKEN_KEY);
+          return;
+        }
+
+        localStorage.setItem(TOKEN_KEY, token);
+        try {
+          const payload = decodeJwtPayload(token);
+          decodedEl.value = JSON.stringify(payload, null, 2);
+        } catch (error) {
+          decodedEl.value = `Unable to decode token: ${error.message}`;
+        }
+      }
+
       async function postJson(url, payload) {
         const res = await fetch(url, {
           method: "POST",
@@ -116,7 +132,7 @@ def jwt_playground() -> str:
         const result = await postJson("/auth/register", credentialsPayload());
         if (result.data.access_token) {
           tokenEl.value = result.data.access_token;
-          localStorage.setItem(TOKEN_KEY, tokenEl.value);
+          refreshDecodedFromToken();
         }
         log("POST /auth/register", result);
       });
@@ -125,7 +141,7 @@ def jwt_playground() -> str:
         const result = await postJson("/auth/login", credentialsPayload());
         if (result.data.access_token) {
           tokenEl.value = result.data.access_token;
-          localStorage.setItem(TOKEN_KEY, tokenEl.value);
+          refreshDecodedFromToken();
         }
         log("POST /auth/login", result);
       });
@@ -139,26 +155,11 @@ def jwt_playground() -> str:
         log("GET /protected", { status: res.status, data });
       });
 
-      document.getElementById("decodeBtn").addEventListener("click", () => {
-        const token = tokenEl.value.trim();
-        if (!token) {
-          decodedEl.value = "";
-          log("Decode JWT", "Add a token first.");
-          return;
-        }
-
-        try {
-          const payload = decodeJwtPayload(token);
-          decodedEl.value = JSON.stringify(payload, null, 2);
-          log("Decode JWT", "Payload decoded successfully.");
-        } catch (error) {
-          decodedEl.value = "";
-          log("Decode JWT", `Unable to decode token: ${error.message}`);
-        }
-      });
-
       document.getElementById("usersBtn").addEventListener("click", async () => {
-        const res = await fetch("/auth/users");
+        const token = tokenEl.value.trim();
+        const res = await fetch("/auth/users", {
+          headers: token ? { "Authorization": `Bearer ${token}` } : {}
+        });
         const data = await res.json().catch(() => ({}));
         log("GET /auth/users", { status: res.status, data });
       });
@@ -167,8 +168,10 @@ def jwt_playground() -> str:
         tokenEl.value = "";
         decodedEl.value = "";
         localStorage.removeItem(TOKEN_KEY);
-        log("Token cleared", "");
       });
+
+      tokenEl.addEventListener("input", refreshDecodedFromToken);
+      refreshDecodedFromToken();
     </script>
   </body>
 </html>

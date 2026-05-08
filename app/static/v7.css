@@ -1,0 +1,13 @@
+.active-btn { outline: 2px solid black; background: #c00; color: #fff; }
+.flow-label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; margin: 8px 0 2px; color: #c00; }
+.version-label { color: #c00; }
+.breadcrumbs { margin: 0 0 8px; }
+.breadcrumbs a { color: #06c; cursor: pointer; text-decoration: underline; }
+#nav-flow1 button, #nav-flow2 button, #nav-flow3 button, #nav-flow4 button, .reset-seed-btn {
+  border: 1px solid #c00;
+  background: #fff;
+  color: #c00;
+  min-width: 110px;
+}
+.compact-meta { margin: 0; }
+.compact-meta + .compact-meta { margin-top: 4px; }
