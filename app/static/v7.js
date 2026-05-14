@@ -122,6 +122,13 @@ function deploymentSameTenantAndSurvey(item, d) {
   return tenantGroupNameFromDeployment(item) === tenantGroupNameFromDeployment(d) && item.name === d.name;
 }
 
+function escHtmlText(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/"/g, '&quot;');
+}
+
 // ── Navigation ──
 const flow1NavIndexByPage = { 'sa-login': 0, 'sa-overview': 1, 'sa-super-admins': 2, 'sa-group-detail': 3, 'sa-invite': 4, 'sa-tracking': 5 };
 const flow2NavIndexByPage = { 'sc-login': 0, 'sc-group-detail': 1, 'sc-invite': 2, 'sc-tracking': 3 };
@@ -303,16 +310,10 @@ function renderOverview() {
   const deploymentRows = sorted.map(d => {
     const groupName = tenantGroupNameFromDeployment(d) || 'Unknown group';
     const nameJs = JSON.stringify(groupName);
-    const escHtml = function (s) {
-      return String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/"/g, '&quot;');
-    };
     return `
       <tr>
-        <td><a href="#" onclick='event.preventDefault();void openTenantGroupByName(${nameJs});' style="cursor:pointer;color:blue">${escHtml(groupName)}</a></td>
-        <td>${escHtml(d.name)}</td>
+        <td><a href="#" onclick='event.preventDefault();void openTenantGroupByName(${nameJs});' style="cursor:pointer;color:blue">${escHtmlText(groupName)}</a></td>
+        <td>${escHtmlText(d.name)}</td>
         <td>${timeAgo(d.deployedAt)}</td>
         <td>${d.closed ? 'Closed' : 'Live'}</td>
         <td>${d.invited}</td>
@@ -454,38 +455,93 @@ function renderSaGroupDetail() {
 function renderSaGroupAdmins() {
   const ws = getCurrentWorkspaceGroup();
   const groupName = ws ? ws.name : 'Unknown';
-  const localRow = getGroups()[currentGroupIndex];
-  const useApiUsersNote = !!(selectedTenantGroup || !localRow);
-  const demoUsers = !useApiUsersNote && localRow.users ? localRow.users : [];
+  const safeName = escHtmlText(groupName);
   const crumbs = document.getElementById('group-admins-breadcrumbs');
   if (getJwtRole() === 'super_admin') {
     crumbs.innerHTML = `
       <span>Admin</span> /
       <a onclick="showGroupOverview()">Overview</a> /
-      <a onclick="showGroupDetailPage()">${groupName}</a> /
+      <a onclick="showGroupDetailPage()">${safeName}</a> /
       <span>Survey creators & runners</span>
     `;
   } else {
     crumbs.innerHTML = `
-      <span>${groupName}</span> /
+      <span>${safeName}</span> /
       <a onclick="showGroupOverview()">Dashboard</a> /
       <span>Survey creators & runners</span>
     `;
   }
   document.getElementById('sa-add-user-title').textContent = 'Add user — ' + groupName;
-  const demoNote = useApiUsersNote
-    ? '<tr><td colspan="3">Demo user rows are not stored for API-backed tenant groups. Use Add user to create staff in FastAPI.</td></tr>'
-    : null;
-  document.getElementById('sa-group-users-body').innerHTML = demoNote
-    ? demoNote
-    : demoUsers.length
-      ? demoUsers.map((u, i) => `
-        <tr>
-          <td>${u.email}</td>
-          <td>${u.role}</td>
-          <td><button onclick="removeGroupUser(${i})">Remove</button></td>
-        </tr>`).join('')
-      : '<tr><td colspan="3">No users yet</td></tr>';
+  const bodyEl = document.getElementById('sa-group-users-body');
+  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="3">Loading…</td></tr>';
+  void loadSaGroupAdminsTable();
+}
+
+async function loadSaGroupAdminsTable() {
+  const bodyEl = document.getElementById('sa-group-users-body');
+  if (!bodyEl) return;
+  const resolved = await resolveWorkspaceTenantGroupId();
+  if (resolved.id) {
+    try {
+      const res = await window.JwtStaticAuth.authFetch('/auth/groups/' + encodeURIComponent(resolved.id) + '/users');
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        const msg = typeof data.detail === 'string' ? data.detail : ('HTTP ' + res.status);
+        bodyEl.innerHTML = '<tr><td colspan="3">' + escHtmlText(msg) + '</td></tr>';
+        return;
+      }
+      const list = Array.isArray(data.users) ? data.users : [];
+      const isSa = getJwtRole() === 'super_admin';
+      if (!list.length) {
+        bodyEl.innerHTML = '<tr><td colspan="3">No users in this group yet.</td></tr>';
+        return;
+      }
+      bodyEl.innerHTML = list
+        .map(function (u) {
+          const user = String(u.username || '');
+          const role = String(u.role || '');
+          const removeCell = isSa
+            ? '<td><button type="button" onclick=\'void removeStaffUserFromApi(' + JSON.stringify(user) + ')\'>Remove</button></td>'
+            : '<td></td>';
+          return (
+            '<tr><td>' +
+            escHtmlText(user) +
+            '</td><td>' +
+            escHtmlText(role) +
+            '</td>' +
+            removeCell +
+            '</tr>'
+          );
+        })
+        .join('');
+    } catch (e) {
+      bodyEl.innerHTML = '<tr><td colspan="3">Error loading users.</td></tr>';
+    }
+    return;
+  }
+  const localRow = getGroups()[currentGroupIndex];
+  if (localRow && localRow.users && localRow.users.length) {
+    bodyEl.innerHTML = localRow.users
+      .map(function (u, i) {
+        return (
+          '<tr><td>' +
+          escHtmlText(u.email) +
+          '</td><td>' +
+          escHtmlText(u.role) +
+          '</td><td><button onclick="removeGroupUser(' +
+          i +
+          ')">Remove</button></td></tr>'
+        );
+      })
+      .join('');
+    return;
+  }
+  if (localRow && localRow.users && !localRow.users.length) {
+    bodyEl.innerHTML = '<tr><td colspan="3">No users yet</td></tr>';
+    return;
+  }
+  bodyEl.innerHTML =
+    '<tr><td colspan="3">No tenant id for this workspace. Open the group from Overview (tenant list), or ensure a tenant group name matches this workspace.</td></tr>';
 }
 
 /** Resolve tenant id for ``POST /auth/admin/users`` from the current workspace (API selection or demo row). */
@@ -557,6 +613,22 @@ async function addGroupUser() {
   document.getElementById('sa-cu-email').value = '';
   document.getElementById('sa-cu-password').value = '';
   navigateToPage('sa-group-admins');
+}
+
+async function removeStaffUserFromApi(username) {
+  if (!assertJwtRole(['super_admin'], 'Remove user requires super_admin JWT.')) return;
+  if (!window.confirm('Remove ' + username + '?')) return;
+  try {
+    const res = await window.JwtStaticAuth.authFetch('/auth/admin/users/' + encodeURIComponent(username), { method: 'DELETE' });
+    if (!res.ok) {
+      const data = await res.json().catch(function () { return {}; });
+      window.alert(typeof data.detail === 'string' ? data.detail : ('HTTP ' + res.status));
+      return;
+    }
+    renderSaGroupAdmins();
+  } catch (e) {
+    window.alert('Request failed.');
+  }
 }
 function removeGroupUser(i) {
   const groups = getGroups();
