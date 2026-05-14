@@ -1,4 +1,9 @@
-.active-btn { outline: 2px solid black; background: #c00; color: #fff; }
+#nav-flow1 button:disabled,
+#nav-flow2 button:disabled,
+#nav-flow3 button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .flow-label { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; margin: 8px 0 2px; color: #c00; }
 .version-label { color: #c00; }
 .breadcrumbs { margin: 0 0 8px; }
@@ -10,4 +15,4 @@
   min-width: 110px;
 }
 .compact-meta { margin: 0; }
-.compact-meta + .compact-meta { margin-top: 4px; }
+.v7-auth-hint { font-size: 0.9rem; color: #444; max-width: 52rem; margin: 0 0 12px; line-height: 1.35; }

@@ -4,9 +4,69 @@ const PAGES = [
   'p-email','p-otp','p-survey'
 ];
 
-let currentGroupIndex = 1; // default to Meridian
-let userRole = 'super_admin';
+let currentGroupIndex = 1; // default to Meridian (demo deployments / surveys only)
+/** When set, Flow 1 group screens show this API tenant (``GET /auth/admin/groups``); demo localStorage rows are not used for the name. */
+let selectedTenantGroup = null;
 let activeFlowNav = 'flow1';
+
+/** JWT `role` from FastAPI access token (sessionStorage). */
+function getJwtRole() {
+  return (window.JwtStaticAuth && window.JwtStaticAuth.getSessionRole && window.JwtStaticAuth.getSessionRole()) || null;
+}
+
+/** Set activeFlowNav from JWT role (super_admin → flow1, survey_creator → flow2, survey_runner → flow3). */
+function syncActiveFlowNavFromJwt() {
+  const r = getJwtRole();
+  if (r === 'super_admin') activeFlowNav = 'flow1';
+  else if (r === 'survey_creator') activeFlowNav = 'flow2';
+  else if (r === 'survey_runner') activeFlowNav = 'flow3';
+  else activeFlowNav = 'flow1';
+}
+
+function assertJwtRole(allowed, message) {
+  const jwt = getJwtRole();
+  const arr = Array.isArray(allowed) ? allowed : [allowed];
+  if (!jwt) {
+    window.alert(message || 'Log in first (FastAPI /auth/login).');
+    return false;
+  }
+  if (arr.indexOf(jwt) === -1) {
+    window.alert(message || ('Requires role: ' + arr.join(' or ') + '. Your JWT role is: ' + jwt));
+    return false;
+  }
+  return true;
+}
+
+/** Which JWT roles may open each page id (before invite/tracking alias). */
+const PAGE_JWT_ACCESS = {
+  'sa-overview': ['super_admin'],
+  'sa-group-detail': ['super_admin'],
+  'sa-group-admins': ['super_admin', 'survey_creator'],
+  'sa-invite': ['super_admin'],
+  'sa-tracking': ['super_admin'],
+  'sa-super-admins': ['super_admin'],
+  'sa-add-group': ['super_admin'],
+  'sa-add-group-user': ['super_admin', 'survey_creator'],
+  'sc-group-detail': ['survey_creator', 'survey_runner'],
+  'sc-invite': ['survey_creator', 'survey_runner'],
+  'sc-tracking': ['survey_creator', 'survey_runner'],
+};
+
+function refreshFlowNavState() {
+  const r = getJwtRole();
+  function wire(navSelector, allowedRoles) {
+    document.querySelectorAll(navSelector + ' button').forEach((btn, i) => {
+      if (i === 0) {
+        btn.disabled = false;
+        return;
+      }
+      btn.disabled = !r || allowedRoles.indexOf(r) === -1;
+    });
+  }
+  wire('#nav-flow1', ['super_admin']);
+  wire('#nav-flow2', ['survey_creator']);
+  wire('#nav-flow3', ['survey_runner']);
+}
 let currentTrackingDeploymentIndex = null;
 let currentInviteDeploymentIndex = null;
 const PARTICIPANT_DEMO_LINK = 'https://surveys.app/s/xdcf530k';
@@ -14,10 +74,8 @@ const PARTICIPANT_DEMO_LINK = 'https://surveys.app/s/xdcf530k';
 // ── Seed data ──
 function seedData() {
   if (!localStorage.getItem('sb_seeded_v7')) {
-    localStorage.setItem('sb_groups', JSON.stringify(V7_SEED_DATA.groups));
     localStorage.setItem('sb_surveys', JSON.stringify(V7_SEED_DATA.surveys));
     localStorage.setItem('sb_deployed', JSON.stringify(V7_SEED_DATA.deployed));
-    localStorage.setItem('sb_superadmins', JSON.stringify(V7_SEED_DATA.superadmins));
     localStorage.setItem('sb_seeded_v7', '1');
   }
 }
@@ -28,8 +86,48 @@ function getSurveys()      { return JSON.parse(localStorage.getItem('sb_surveys'
 function saveSurveys(s)    { localStorage.setItem('sb_surveys', JSON.stringify(s)); }
 function getDeployed()     { return JSON.parse(localStorage.getItem('sb_deployed') || '[]'); }
 function saveDeployed(d)   { localStorage.setItem('sb_deployed', JSON.stringify(d)); }
-function getSuperAdmins()  { return JSON.parse(localStorage.getItem('sb_superadmins') || '[]'); }
-function saveSuperAdmins(l){ localStorage.setItem('sb_superadmins', JSON.stringify(l)); }
+
+const DEMO_TENANT_GROUP_NAMES = ['Hartwell & Sons', 'Meridian Research Group', 'Foxglove Studio'];
+
+function tenantGroupNameFromSurvey(s) {
+  if (!s) return '';
+  if (s.tenantGroupName) return String(s.tenantGroupName);
+  if (typeof s.groupIndex === 'number' && s.groupIndex >= 0 && s.groupIndex < DEMO_TENANT_GROUP_NAMES.length) {
+    return DEMO_TENANT_GROUP_NAMES[s.groupIndex];
+  }
+  return '';
+}
+
+function tenantGroupNameFromDeployment(d) {
+  if (!d) return '';
+  if (d.tenantGroupName) return String(d.tenantGroupName);
+  if (typeof d.groupIndex === 'number' && d.groupIndex >= 0 && d.groupIndex < DEMO_TENANT_GROUP_NAMES.length) {
+    return DEMO_TENANT_GROUP_NAMES[d.groupIndex];
+  }
+  return '';
+}
+
+function currentWorkspaceTenantGroupName() {
+  if (selectedTenantGroup && selectedTenantGroup.name) return String(selectedTenantGroup.name);
+  const groups = getGroups();
+  const g = groups[currentGroupIndex];
+  if (g && g.name) return String(g.name);
+  if (typeof currentGroupIndex === 'number' && currentGroupIndex >= 0 && currentGroupIndex < DEMO_TENANT_GROUP_NAMES.length) {
+    return DEMO_TENANT_GROUP_NAMES[currentGroupIndex];
+  }
+  return '';
+}
+
+function deploymentSameTenantAndSurvey(item, d) {
+  return tenantGroupNameFromDeployment(item) === tenantGroupNameFromDeployment(d) && item.name === d.name;
+}
+
+function escHtmlText(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/"/g, '&quot;');
+}
 
 // ── Navigation ──
 const flow1NavIndexByPage = { 'sa-login': 0, 'sa-overview': 1, 'sa-super-admins': 2, 'sa-group-detail': 3, 'sa-invite': 4, 'sa-tracking': 5 };
@@ -37,34 +135,85 @@ const flow2NavIndexByPage = { 'sc-login': 0, 'sc-group-detail': 1, 'sc-invite': 
 const flow3NavIndexByPage = { 'sc-login': 0, 'sc-group-detail': 1, 'sc-invite': 2, 'sc-tracking': 3 };
 const flow4NavIndexByPage = { 'p-email': 0, 'p-otp': 1, 'p-survey': 2 };
 
-function openRoleFlowPage(id, role, flowNav) {
-  userRole = role;
-  activeFlowNav = flowNav;
+function openSharedLogin() {
+  syncActiveFlowNavFromJwt();
   const roleLabel = document.getElementById('sc-login-role-label');
-  if (roleLabel) roleLabel.textContent = 'Role: ' + role;
+  if (roleLabel) {
+    roleLabel.textContent = 'Log in with FastAPI /auth/login. After login, the highlighted flow matches your JWT role.';
+  }
+  navigateToPage('sc-login');
+}
+
+function openRoleFlowPage(id) {
+  syncActiveFlowNavFromJwt();
   navigateToPage(id);
 }
 
-function openSharedLogin(role, flowNav) {
-  openRoleFlowPage('sc-login', role, flowNav);
-}
-
-function openRolePage(id, role, flowNav) {
-  userRole = role;
-  activeFlowNav = flowNav;
+function openRolePage(id) {
+  syncActiveFlowNavFromJwt();
   navigateToPage(id);
 }
 
-function continueFromSharedLogin() {
-  if (userRole === 'super_admin') {
+function continueFromAppLoginAfterSuccess() {
+  if (getJwtRole() === 'super_admin') {
     navigateToPage('sa-overview');
     return;
   }
-  openRoleFlowPage('sc-group-detail', userRole, activeFlowNav);
+  navigateToPage('sc-group-detail');
+}
+
+async function finishAppLogin(email, password, errEl) {
+  if (errEl) errEl.textContent = '';
+  if (!email || !password) {
+    if (errEl) errEl.textContent = 'Email and password are required.';
+    return;
+  }
+  const r = await window.JwtStaticAuth.login(email, password);
+  if (!r.ok) {
+    if (errEl) errEl.textContent = r.message || 'Login failed';
+    return;
+  }
+  const role = getJwtRole();
+  if (!role) {
+    window.JwtStaticAuth.logout();
+    if (errEl) errEl.textContent = 'Token is missing a role claim.';
+    return;
+  }
+  syncActiveFlowNavFromJwt();
+  continueFromAppLoginAfterSuccess();
+  refreshFlowNavState();
+}
+
+async function submitSaLogin() {
+  const email = (document.getElementById('sa-login-email') && document.getElementById('sa-login-email').value || '').trim();
+  const password = (document.getElementById('sa-login-password') && document.getElementById('sa-login-password').value) || '';
+  const errEl = document.getElementById('sa-login-error');
+  await finishAppLogin(email, password, errEl);
+}
+
+async function submitSharedLogin() {
+  const email = (document.getElementById('sc-login-email') && document.getElementById('sc-login-email').value || '').trim();
+  const password = (document.getElementById('sc-login-password') && document.getElementById('sc-login-password').value) || '';
+  const errEl = document.getElementById('sc-login-error');
+  await finishAppLogin(email, password, errEl);
+}
+
+function getCurrentWorkspaceGroup() {
+  if (selectedTenantGroup && selectedTenantGroup.id && selectedTenantGroup.name) {
+    return { id: String(selectedTenantGroup.id), name: String(selectedTenantGroup.name) };
+  }
+  const groups = getGroups();
+  const g = groups[currentGroupIndex];
+  if (g && g.name) {
+    return { id: g.groupId ? String(g.groupId) : null, name: g.name };
+  }
+  const name = currentWorkspaceTenantGroupName();
+  return name ? { id: null, name } : null;
 }
 
 function showGroupOverview() {
-  if (userRole === 'super_admin') {
+  selectedTenantGroup = null;
+  if (getJwtRole() === 'super_admin') {
     navigateToPage('sa-overview');
     return;
   }
@@ -72,7 +221,7 @@ function showGroupOverview() {
 }
 
 function showGroupDetailPage() {
-  if (userRole === 'super_admin') {
+  if (getJwtRole() === 'super_admin') {
     navigateToPage('sa-group-detail');
     return;
   }
@@ -80,6 +229,20 @@ function showGroupDetailPage() {
 }
 
 function navigateToPage(id) {
+  if (getJwtRole()) syncActiveFlowNavFromJwt();
+
+  const gate = PAGE_JWT_ACCESS[id];
+  if (gate && gate.length) {
+    const jwtRole = getJwtRole();
+    if (!jwtRole || gate.indexOf(jwtRole) === -1) {
+      if (!jwtRole) window.alert('Log in first (FastAPI /auth/login).');
+      else window.alert('This screen requires one of: ' + gate.join(', ') + '. Your JWT role is: ' + jwtRole);
+      return;
+    }
+  }
+
+  if (id === 'sa-overview') selectedTenantGroup = null;
+
   const effectiveId = (id === 'sa-invite' ? 'sc-invite' : (id === 'sa-tracking' ? 'sc-tracking' : id));
   PAGES.forEach(p => document.getElementById('page-' + p).style.display = p === effectiveId ? '' : 'none');
   document.querySelectorAll('#nav-flow1 button').forEach(b => b.classList.remove('active-btn'));
@@ -88,6 +251,10 @@ function navigateToPage(id) {
   document.querySelectorAll('#nav-flow4 button').forEach(b => b.classList.remove('active-btn'));
   if (id === 'sc-login' && activeFlowNav === 'flow1') {
     document.querySelectorAll('#nav-flow1 button')[0].classList.add('active-btn');
+  } else if (id === 'sc-login' && activeFlowNav === 'flow2') {
+    document.querySelectorAll('#nav-flow2 button')[0].classList.add('active-btn');
+  } else if (id === 'sc-login' && activeFlowNav === 'flow3') {
+    document.querySelectorAll('#nav-flow3 button')[0].classList.add('active-btn');
   } else if (flow1NavIndexByPage[id] !== undefined) {
     document.querySelectorAll('#nav-flow1 button')[flow1NavIndexByPage[id]].classList.add('active-btn');
   }
@@ -102,21 +269,25 @@ function navigateToPage(id) {
   if (id === 'sa-group-detail') renderSaGroupDetail();
   if (id === 'sa-group-admins') renderSaGroupAdmins();
   if (id === 'sa-tracking')     renderTrackingViewShared('super_admin');
-  if (id === 'sa-super-admins') renderSuperAdmins();
-  if (id === 'sa-invite' || id === 'sc-invite') renderInviteLanding(id === 'sa-invite' ? 'super_admin' : userRole);
+  if (id === 'sa-add-group-user') renderSaAddGroupUser();
+  if (id === 'sa-invite' || id === 'sc-invite') renderInviteLanding(id === 'sa-invite' ? 'super_admin' : (getJwtRole() || ''));
   if (id === 'sc-group-detail') renderScGroupDetail();
-  if (id === 'sc-tracking')     renderTrackingViewShared(userRole);
+  if (id === 'sc-tracking')     renderTrackingViewShared(getJwtRole() || 'survey_creator');
   if (id === 'p-email')         renderParticipantEmail();
+
+  refreshFlowNavState();
 }
 
 function resetDemoData() {
+  if (window.JwtStaticAuth && window.JwtStaticAuth.logout) window.JwtStaticAuth.logout();
+  activeFlowNav = 'flow1';
+  selectedTenantGroup = null;
   localStorage.removeItem('sb_groups');
   localStorage.removeItem('sb_surveys');
   localStorage.removeItem('sb_deployed');
-  localStorage.removeItem('sb_superadmins');
   localStorage.removeItem('sb_seeded_v7');
   seedData();
-  openSharedLogin('super_admin', 'flow1');
+  openSharedLogin();
 }
 
 // ── F1: Overview ──
@@ -131,20 +302,18 @@ function timeAgo(dateStr) {
 }
 
 function renderOverview() {
-  const groups = getGroups();
   const allDeployed = getDeployed();
   const deployed = allDeployed.filter(d => !d.closed);
-  const surveys = getSurveys();
   const container = document.getElementById('overview-container');
 
   const sorted = [...deployed].sort((a, b) => new Date(b.deployedAt) - new Date(a.deployedAt));
   const deploymentRows = sorted.map(d => {
-    const group = groups[d.groupIndex];
-    const groupName = group ? group.name : 'Unknown group';
+    const groupName = tenantGroupNameFromDeployment(d) || 'Unknown group';
+    const nameJs = JSON.stringify(groupName);
     return `
       <tr>
-        <td><a onclick="openGroup(${d.groupIndex})" style="cursor:pointer;color:blue">${groupName}</a></td>
-        <td>${d.name}</td>
+        <td><a href="#" onclick='event.preventDefault();void openTenantGroupByName(${nameJs});' style="cursor:pointer;color:blue">${escHtmlText(groupName)}</a></td>
+        <td>${escHtmlText(d.name)}</td>
         <td>${timeAgo(d.deployedAt)}</td>
         <td>${d.closed ? 'Closed' : 'Live'}</td>
         <td>${d.invited}</td>
@@ -152,58 +321,127 @@ function renderOverview() {
       </tr>`;
   }).join('');
 
-  const groupRows = groups.map((g, gi) => {
-    const surveyCount = surveys.filter(s => s.groupIndex === gi).length;
-    const deploymentCount = allDeployed.filter(d => d.groupIndex === gi).length;
-    const userCount = (g.users || []).length;
-    const magicLinkCount = allDeployed
-      .filter(d => d.groupIndex === gi)
-      .reduce((acc, d) => acc + ((d.invites || []).length), 0);
-    return `
-      <tr>
-        <td><a onclick="openGroup(${gi})" style="cursor:pointer;color:blue">${g.name}</a></td>
-        <td>${surveyCount}</td>
-        <td>${deploymentCount}</td>
-        <td>${userCount}</td>
-        <td>${magicLinkCount}</td>
-      </tr>`;
-  }).join('') || '<tr><td colspan="5">No groups yet</td></tr>';
-
   container.innerHTML = `
     <h3>Live deployments</h3>
+    <p class="compact-meta">Demo surveys and deployments from <code>localStorage</code>; group names match tenant groups from <code>GET /auth/admin/groups</code>.</p>
     <table border="1" cellpadding="6" cellspacing="0">
       <thead><tr><th>Group</th><th>Survey</th><th>Age</th><th>Status</th><th>Invited</th><th>Submitted</th></tr></thead>
       <tbody>${deploymentRows || '<tr><td colspan="6">No live deployments yet</td></tr>'}</tbody>
     </table>
     <br>
-    <h3>Groups summary <button onclick="navigateToPage('sa-add-group')">+ Add group</button></h3>
+    <h3>Tenant groups <button onclick="navigateToPage('sa-add-group')">+ Add group</button></h3>
+    <p class="compact-meta">Loaded from <code>GET /auth/admin/groups</code> (not localStorage).</p>
     <table border="1" cellpadding="6" cellspacing="0">
-      <thead><tr><th>Group</th><th>Surveys</th><th>Deployments</th><th>Users</th><th>Magic links created</th></tr></thead>
-      <tbody>${groupRows}</tbody>
+      <thead><tr><th>Name</th><th>Global admin group</th></tr></thead>
+      <tbody id="api-groups-summary-body"><tr><td colspan="2">Loading…</td></tr></tbody>
     </table>`;
+
+  const bodyEl = document.getElementById('api-groups-summary-body');
+  if (!bodyEl) return;
+
+  (async function loadTenantGroupsTable() {
+    try {
+      if (getJwtRole() !== 'super_admin') {
+        bodyEl.innerHTML =
+          '<tr><td colspan="2">Log in as <code>super_admin</code> to load tenant groups from the API.</td></tr>';
+        return;
+      }
+      const res = await window.JwtStaticAuth.authFetch('/auth/admin/groups');
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        bodyEl.innerHTML =
+          '<tr><td colspan="2">' +
+          (typeof data.detail === 'string' ? data.detail : 'Could not load groups') +
+          '</td></tr>';
+        return;
+      }
+      const list = data.groups || [];
+      if (!Array.isArray(list) || !list.length) {
+        bodyEl.innerHTML = '<tr><td colspan="2">No tenant groups yet. Use + Add group.</td></tr>';
+        return;
+      }
+      bodyEl.innerHTML = list
+        .map(function (g) {
+          const esc = function (s) {
+            return String(s)
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/"/g, '&quot;');
+          };
+          const globalCell = g.is_super_admin_group ? 'Yes' : '—';
+          return (
+            '<tr><td><a href="#" onclick=\'event.preventDefault();void openTenantGroupFromApi(' +
+            JSON.stringify(String(g.id)) +
+            ',' +
+            JSON.stringify(String(g.name)) +
+            ');\' style="cursor:pointer;color:blue">' +
+            esc(g.name) +
+            '</a></td><td>' +
+            globalCell +
+            '</td></tr>'
+          );
+        })
+        .join('');
+    } catch (e) {
+      bodyEl.innerHTML = '<tr><td colspan="2">Error loading groups.</td></tr>';
+    }
+  })();
 }
 
-function openGroup(i) {
-  currentGroupIndex = i;
+async function openTenantGroupByName(name) {
+  if (!assertJwtRole(['super_admin'], 'Open tenant from overview requires super_admin JWT.')) return;
+  const want = String(name || '').trim();
+  if (!want) return;
+  try {
+    const res = await window.JwtStaticAuth.authFetch('/auth/admin/groups');
+    const data = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      window.alert(typeof data.detail === 'string' ? data.detail : ('HTTP ' + res.status));
+      return;
+    }
+    const list = data.groups || [];
+    const row = list.find(function (g) { return String(g.name || '').trim() === want; });
+    if (!row || row.id == null) {
+      window.alert(
+        'No tenant group named "' + want + '" in the API. Restart the app so demo groups are seeded, or create the group first.',
+      );
+      return;
+    }
+    openTenantGroupFromApi(row.id, row.name);
+  } catch (e) {
+    window.alert('Error loading groups.');
+  }
+}
+
+function openTenantGroupFromApi(id, name) {
+  selectedTenantGroup = { id: String(id), name: String(name) };
+  currentGroupIndex = -1;
   navigateToPage('sa-group-detail');
 }
 
-function addGroup() {
+async function addGroup() {
   const name = document.getElementById('sa-co-name').value.trim();
   if (!name) return;
-  const groups = getGroups();
-  groups.push({ name, users: [] });
-  saveGroups(groups);
+  const res = await window.JwtStaticAuth.authFetch('/auth/admin/groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name }),
+  });
+  const data = await res.json().catch(function () { return {}; });
+  if (!res.ok) {
+    window.alert(typeof data.detail === 'string' ? data.detail : ('HTTP ' + res.status));
+    return;
+  }
   document.getElementById('sa-co-name').value = '';
   navigateToPage('sa-overview');
 }
 
 // ── F1: Group detail ──
 function renderSaGroupDetail() {
-  const groups = getGroups();
-  const group = groups[currentGroupIndex];
-  document.getElementById('sa-group-crumb').textContent = group.name;
-  document.getElementById('sa-group-title').textContent = group.name;
+  const ws = getCurrentWorkspaceGroup();
+  const name = ws ? ws.name : 'Unknown';
+  document.getElementById('sa-group-crumb').textContent = name;
+  document.getElementById('sa-group-title').textContent = name;
   renderGroupDetailTables({
     surveysBodyId: 'sa-group-surveys-body',
     deployedBodyId: 'sa-group-deployed-body',
@@ -215,78 +453,264 @@ function renderSaGroupDetail() {
 }
 
 function renderSaGroupAdmins() {
-  const groups = getGroups();
-  const group = groups[currentGroupIndex];
+  const ws = getCurrentWorkspaceGroup();
+  const groupName = ws ? ws.name : 'Unknown';
+  const safeName = escHtmlText(groupName);
   const crumbs = document.getElementById('group-admins-breadcrumbs');
-  if (userRole === 'super_admin') {
+  if (getJwtRole() === 'super_admin') {
     crumbs.innerHTML = `
       <span>Admin</span> /
       <a onclick="showGroupOverview()">Overview</a> /
-      <a onclick="showGroupDetailPage()">${group.name}</a> /
-      <span>group admins</span>
+      <a onclick="showGroupDetailPage()">${safeName}</a> /
+      <span>Survey creators & runners</span>
     `;
   } else {
     crumbs.innerHTML = `
-      <span>${group.name}</span> /
+      <span>${safeName}</span> /
       <a onclick="showGroupOverview()">Dashboard</a> /
-      <span>group admins</span>
+      <span>Survey creators & runners</span>
     `;
   }
-  document.getElementById('sa-add-user-title').textContent = 'Add user — ' + group.name;
-  document.getElementById('sa-group-users-body').innerHTML = group.users.length
-    ? group.users.map((u, i) => `
-        <tr>
-          <td>${u.email}</td>
-          <td>${u.role}</td>
-          <td><button onclick="removeGroupUser(${i})">Remove</button></td>
-        </tr>`).join('')
-    : '<tr><td colspan="3">No users yet</td></tr>';
+  document.getElementById('sa-add-user-title').textContent = 'Add user — ' + groupName;
+  const bodyEl = document.getElementById('sa-group-users-body');
+  if (bodyEl) bodyEl.innerHTML = '<tr><td colspan="3">Loading…</td></tr>';
+  void loadSaGroupAdminsTable();
 }
 
-function addGroupUser() {
+async function loadSaGroupAdminsTable() {
+  const bodyEl = document.getElementById('sa-group-users-body');
+  if (!bodyEl) return;
+  const resolved = await resolveWorkspaceTenantGroupId();
+  if (resolved.id) {
+    try {
+      const res = await window.JwtStaticAuth.authFetch('/auth/groups/' + encodeURIComponent(resolved.id) + '/users');
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok) {
+        const msg = typeof data.detail === 'string' ? data.detail : ('HTTP ' + res.status);
+        bodyEl.innerHTML = '<tr><td colspan="3">' + escHtmlText(msg) + '</td></tr>';
+        return;
+      }
+      const list = Array.isArray(data.users) ? data.users : [];
+      const isSa = getJwtRole() === 'super_admin';
+      if (!list.length) {
+        bodyEl.innerHTML = '<tr><td colspan="3">No users in this group yet.</td></tr>';
+        return;
+      }
+      bodyEl.innerHTML = list
+        .map(function (u) {
+          const user = String(u.username || '');
+          const role = String(u.role || '');
+          const removeCell = isSa
+            ? '<td><button type="button" onclick=\'void removeStaffUserFromApi(' + JSON.stringify(user) + ')\'>Remove</button></td>'
+            : '<td></td>';
+          return (
+            '<tr><td>' +
+            escHtmlText(user) +
+            '</td><td>' +
+            escHtmlText(role) +
+            '</td>' +
+            removeCell +
+            '</tr>'
+          );
+        })
+        .join('');
+    } catch (e) {
+      bodyEl.innerHTML = '<tr><td colspan="3">Error loading users.</td></tr>';
+    }
+    return;
+  }
+  const localRow = getGroups()[currentGroupIndex];
+  if (localRow && localRow.users && localRow.users.length) {
+    bodyEl.innerHTML = localRow.users
+      .map(function (u, i) {
+        return (
+          '<tr><td>' +
+          escHtmlText(u.email) +
+          '</td><td>' +
+          escHtmlText(u.role) +
+          '</td><td><button onclick="removeGroupUser(' +
+          i +
+          ')">Remove</button></td></tr>'
+        );
+      })
+      .join('');
+    return;
+  }
+  if (localRow && localRow.users && !localRow.users.length) {
+    bodyEl.innerHTML = '<tr><td colspan="3">No users yet</td></tr>';
+    return;
+  }
+  bodyEl.innerHTML =
+    '<tr><td colspan="3">No tenant id for this workspace. Open the group from Overview (tenant list), or ensure a tenant group name matches this workspace.</td></tr>';
+}
+
+/** Resolve tenant id for ``POST /auth/admin/users`` from the current workspace (API selection or demo row). */
+async function resolveWorkspaceTenantGroupId() {
+  const ws = getCurrentWorkspaceGroup();
+  if (!ws || !ws.name) return { id: null, source: 'none' };
+  if (ws.id) return { id: String(ws.id), source: 'tenant id for this workspace' };
+  const rc = await window.JwtStaticAuth.authFetch('/auth/admin/groups');
+  const data = await rc.json().catch(function () { return {}; });
+  if (!rc.ok || !Array.isArray(data.groups)) return { id: null, source: 'none' };
+  const want = String(ws.name || '').trim();
+  const row = data.groups.find(function (x) { return String(x.name || '').trim() === want; });
+  if (row && row.id) return { id: String(row.id), source: 'GET /auth/admin/groups matched name "' + want + '"' };
+  return { id: null, source: 'none' };
+}
+
+async function renderSaAddGroupUser() {
+  const ws = getCurrentWorkspaceGroup();
+  const titleEl = document.getElementById('sa-add-user-title');
+  if (titleEl && ws) titleEl.textContent = 'Add user — ' + ws.name;
+  const hintEl = document.getElementById('sa-tenant-group-hint');
+  if (!hintEl) return;
+  hintEl.textContent = 'Resolving tenant group…';
+  const resolved = await resolveWorkspaceTenantGroupId();
+  if (!resolved.id) {
+    hintEl.textContent =
+      'No tenant id for this workspace. Open it from the Tenant groups table (API list) or ensure a tenant group name matches this workspace.';
+    return;
+  }
+  hintEl.textContent =
+    'New users will be created with JSON field "group": ' +
+    resolved.id +
+    ' — source: ' +
+    resolved.source +
+    '. (FastAPI expects "group", not "groupID".)';
+}
+
+async function addGroupUser() {
   const email = document.getElementById('sa-cu-email').value.trim();
-  const role  = document.getElementById('sa-cu-role').value;
+  const role = document.getElementById('sa-cu-role').value;
+  const password = (document.getElementById('sa-cu-password') && document.getElementById('sa-cu-password').value) || '';
   if (!email) return;
-  const groups = getGroups();
-  groups[currentGroupIndex].users.push({ email, role });
-  saveGroups(groups);
+  if (getJwtRole() !== 'super_admin') {
+    window.alert('Only a super_admin JWT can create staff users via POST /auth/admin/users.');
+    return;
+  }
+  if (password.length < 8) {
+    window.alert('Password must be at least 8 characters (API rule).');
+    return;
+  }
+  const resolved = await resolveWorkspaceTenantGroupId();
+  const group = resolved.id;
+  if (!group) {
+    window.alert(
+      'Could not resolve a tenant group id for this workspace. Open the group from the Overview list (loaded from GET /auth/admin/groups), or ensure a tenant group exists with the same display name.',
+    );
+    return;
+  }
+  const res = await window.JwtStaticAuth.authFetch('/auth/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: email, password: password, role: role, group: group }),
+  });
+  const data = await res.json().catch(function () { return {}; });
+  if (!res.ok) {
+    window.alert(typeof data.detail === 'string' ? data.detail : ('HTTP ' + res.status));
+    return;
+  }
   document.getElementById('sa-cu-email').value = '';
+  document.getElementById('sa-cu-password').value = '';
   navigateToPage('sa-group-admins');
+}
+
+async function removeStaffUserFromApi(username) {
+  if (!assertJwtRole(['super_admin'], 'Remove user requires super_admin JWT.')) return;
+  if (!window.confirm('Remove ' + username + '?')) return;
+  try {
+    const res = await window.JwtStaticAuth.authFetch('/auth/admin/users/' + encodeURIComponent(username), { method: 'DELETE' });
+    if (!res.ok) {
+      const data = await res.json().catch(function () { return {}; });
+      window.alert(typeof data.detail === 'string' ? data.detail : ('HTTP ' + res.status));
+      return;
+    }
+    renderSaGroupAdmins();
+  } catch (e) {
+    window.alert('Request failed.');
+  }
 }
 function removeGroupUser(i) {
   const groups = getGroups();
-  groups[currentGroupIndex].users.splice(i, 1);
+  const row = groups[currentGroupIndex];
+  if (!row || !row.users) return;
+  row.users.splice(i, 1);
   saveGroups(groups);
   renderSaGroupAdmins();
 }
 
-// ── F1: Super admins ──
-function addSuperAdmin() {
-  const email = document.getElementById('new-sa-email').value.trim();
-  if (!email) return;
-  const list = getSuperAdmins();
-  list.push({ email });
-  saveSuperAdmins(list);
+// ── F1: Super admins (from FastAPI) ──
+async function fetchGlobalAdminGroupId() {
+  const rc = await window.JwtStaticAuth.authFetch('/auth/admin/groups');
+  const data = await rc.json().catch(function () { return {}; });
+  if (!rc.ok || !Array.isArray(data.groups)) return null;
+  const row = data.groups.find(function (g) { return g.is_super_admin_group === true; });
+  return row && row.id ? String(row.id) : null;
+}
+
+async function renderSuperAdmins() {
+  const bodyEl = document.getElementById('superadmins-body');
+  if (!bodyEl) return;
+  bodyEl.innerHTML = '<tr><td colspan="2">Loading…</td></tr>';
+  const res = await window.JwtStaticAuth.authFetch('/auth/super-admins');
+  const data = await res.json().catch(function () { return {}; });
+  if (!res.ok) {
+    const msg = typeof data.detail === 'string' ? data.detail : (res.statusText || 'Request failed');
+    bodyEl.innerHTML = '<tr><td colspan="2">' + msg + '</td></tr>';
+    return;
+  }
+  const list = data.super_admins || [];
+  bodyEl.innerHTML = list.length
+    ? list.map(function (u) {
+        return '<tr><td>' + String(u).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</td><td><button type="button" onclick="removeSuperAdmin(' + JSON.stringify(u) + ')">Remove</button></td></tr>';
+      }).join('')
+    : '<tr><td colspan="2">No super admins</td></tr>';
+}
+
+async function addSuperAdmin() {
+  const username = (document.getElementById('new-sa-email') && document.getElementById('new-sa-email').value || '').trim();
+  const password = (document.getElementById('new-sa-password') && document.getElementById('new-sa-password').value) || '';
+  if (!username || !password) {
+    window.alert('Username and password are required.');
+    return;
+  }
+  const group = await fetchGlobalAdminGroupId();
+  if (!group) {
+    window.alert('Could not resolve the Global Admin group. Ensure one row has is_super_admin_group true in GET /auth/admin/groups.');
+    return;
+  }
+  const res = await window.JwtStaticAuth.authFetch('/auth/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: username, password: password, role: 'super_admin', group: group }),
+  });
+  const data = await res.json().catch(function () { return {}; });
+  if (!res.ok) {
+    window.alert(typeof data.detail === 'string' ? data.detail : 'Create failed');
+    return;
+  }
   document.getElementById('new-sa-email').value = '';
-  renderSuperAdmins();
+  document.getElementById('new-sa-password').value = '';
+  await renderSuperAdmins();
 }
-function removeSuperAdmin(i) {
-  const list = getSuperAdmins();
-  list.splice(i, 1);
-  saveSuperAdmins(list);
-  renderSuperAdmins();
-}
-function renderSuperAdmins() {
-  document.getElementById('superadmins-body').innerHTML = getSuperAdmins().map((u, i) => `
-    <tr><td>${u.email}</td><td><button onclick="removeSuperAdmin(${i})">Remove</button></td></tr>`).join('');
+
+async function removeSuperAdmin(username) {
+  if (!window.confirm('Remove ' + username + '?')) return;
+  const res = await window.JwtStaticAuth.authFetch('/auth/admin/users/' + encodeURIComponent(username), { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(function () { return {}; });
+    window.alert(typeof data.detail === 'string' ? data.detail : ('Error ' + res.status));
+    return;
+  }
+  await renderSuperAdmins();
 }
 
 // ── F2: Group detail (creator) ──
 function renderScGroupDetail() {
-  const groups = getGroups();
-  const group = groups[currentGroupIndex];
-  const isSurveyRunner = userRole === 'survey_runner';
-  document.getElementById('sc-group-title').textContent = group ? group.name : 'Unknown group';
+  const ws = getCurrentWorkspaceGroup();
+  const groupName = ws ? ws.name : 'Unknown group';
+  const isSurveyRunner = getJwtRole() === 'survey_runner';
+  document.getElementById('sc-group-title').textContent = groupName;
   document.getElementById('sc-group-admins-row').style.display = isSurveyRunner ? 'none' : '';
   document.getElementById('sc-create-survey-row').style.display = isSurveyRunner ? 'none' : '';
   renderGroupDetailTables({
@@ -301,9 +725,10 @@ function renderScGroupDetail() {
 }
 
 function getDeployedForCurrentGroup() {
+  const want = currentWorkspaceTenantGroupName();
   return getDeployed()
     .map((d, i) => ({ ...d, globalIndex: i }))
-    .filter(d => d.groupIndex === currentGroupIndex)
+    .filter(d => tenantGroupNameFromDeployment(d) === want)
     .sort((a, b) => {
       if (!!a.closed !== !!b.closed) return a.closed ? 1 : -1;
       return new Date(b.deployedAt) - new Date(a.deployedAt);
@@ -312,7 +737,8 @@ function getDeployedForCurrentGroup() {
 
 function renderGroupDetailTables(config) {
   const showEditButton = config.showEditButton !== false;
-  const surveys = getSurveys().filter(s => s.groupIndex === currentGroupIndex);
+  const want = currentWorkspaceTenantGroupName();
+  const surveys = getSurveys().filter(s => tenantGroupNameFromSurvey(s) === want);
   document.getElementById(config.surveysBodyId).innerHTML = surveys.length
     ? surveys.map(s => `
         <tr>
@@ -397,7 +823,12 @@ function createSurveyForCurrentGroup() {
   const used = surveys.map(s => s.name);
   const name = names.find(n => !used.includes(n)) || 'New Survey ' + (surveys.length + 1);
   const newId = surveys.length ? Math.max(...surveys.map(s => s.id)) + 1 : 1;
-  surveys.push({ id: newId, name, groupIndex: currentGroupIndex });
+  const tenant = currentWorkspaceTenantGroupName();
+  if (!tenant) {
+    window.alert('Could not resolve a tenant group name for this workspace.');
+    return;
+  }
+  surveys.push({ id: newId, name, tenantGroupName: tenant });
   saveSurveys(surveys);
 }
 
@@ -405,7 +836,12 @@ function deploySurveyForCurrentGroup(id) {
   const survey = getSurveys().find(s => s.id === id);
   if (!survey) return;
   const deployed = getDeployed();
-  deployed.push({ name: survey.name, groupIndex: currentGroupIndex, deployedAt: new Date().toISOString(), invited: 0, submitted: 0 });
+  const tenant = currentWorkspaceTenantGroupName();
+  if (!tenant) {
+    window.alert('Could not resolve a tenant group name for this workspace.');
+    return;
+  }
+  deployed.push({ name: survey.name, tenantGroupName: tenant, deployedAt: new Date().toISOString(), invited: 0, submitted: 0 });
   saveDeployed(deployed);
 }
 
@@ -416,13 +852,13 @@ function toggleSurveyClosed(globalIndex) {
 }
 
 function openTracking(globalIndex) {
-  userRole = userRole || 'survey_creator';
+  if (!assertJwtRole(['survey_creator', 'survey_runner'], 'Open Tracking requires survey_creator or survey_runner JWT.')) return;
   currentTrackingDeploymentIndex = globalIndex;
   navigateToPage('sc-tracking');
 }
 
 function openTrackingAdmin(globalIndex) {
-  userRole = 'super_admin';
+  if (!assertJwtRole(['super_admin'], 'Admin tracking requires super_admin JWT.')) return;
   currentTrackingDeploymentIndex = globalIndex;
   navigateToPage('sa-tracking');
 }
@@ -432,8 +868,9 @@ function renderTrackingViewShared(role) {
   let d = deployed[currentTrackingDeploymentIndex];
   let usedFallback = false;
   if (!d) {
+    const want = currentWorkspaceTenantGroupName();
     const fallbackIndex = deployed.findIndex(item =>
-      item.groupIndex === currentGroupIndex &&
+      tenantGroupNameFromDeployment(item) === want &&
       Array.isArray(item.invites) &&
       item.invites.length > 0
     );
@@ -447,13 +884,12 @@ function renderTrackingViewShared(role) {
     document.getElementById('sc-tracking-deployed-at').textContent = '';
     document.getElementById('tracking-context-text').textContent = '';
     document.getElementById('sc-tracking-demo-note').style.display = 'none';
-    document.getElementById('tracking-emails-body').innerHTML = '<tr><td colspan="5">No invites yet</td></tr>';
+    document.getElementById('tracking-emails-body').innerHTML = '<tr><td colspan="4">No invites yet</td></tr>';
     return;
   }
   document.getElementById('sc-tracking-demo-note').style.display = usedFallback ? '' : 'none';
 
-  const group = getGroups()[d.groupIndex];
-  const groupName = group ? group.name : 'Unknown group';
+  const groupName = tenantGroupNameFromDeployment(d) || 'Unknown group';
   const deploymentNumber = getDeploymentNumber(currentTrackingDeploymentIndex);
   const breadcrumbs = document.getElementById('tracking-breadcrumbs');
   if (role === 'super_admin') {
@@ -484,9 +920,9 @@ function renderTrackingViewShared(role) {
   document.getElementById('tracking-emails-body').innerHTML = invites.length
     ? invites.map(i => {
       const activityAt = i.lastActivityAt || d.deployedAt;
-      return `<tr><td>${i.email || 'removed'}</td><td>${i.link || ''}</td><td>${i.otp || ''}</td><td>${i.status}</td><td>${activityAt ? timeAgo(activityAt) : ''}</td></tr>`;
+      return `<tr><td>${i.email || 'removed'}</td><td>${i.otp || ''}</td><td>${i.status}</td><td>${activityAt ? timeAgo(activityAt) : ''}</td></tr>`;
     }).join('')
-    : '<tr><td colspan="5">No invites yet</td></tr>';
+    : '<tr><td colspan="4">No invites yet</td></tr>';
 }
 
 function deleteTrackedEmails() {
@@ -497,20 +933,19 @@ function deleteTrackedEmails() {
   d.invites = (d.invites || []).map(i => ({ ...i, email: '' }));
   d.tracked = 'deleted';
   saveDeployed(deployed);
-  renderTrackingViewShared(userRole);
+  renderTrackingViewShared(getJwtRole() === 'super_admin' ? 'super_admin' : (getJwtRole() || 'survey_creator'));
 }
 
 function getDeploymentContext(globalIndex) {
   const deployed = getDeployed();
   const d = deployed[globalIndex];
-  const group = d ? getGroups()[d.groupIndex] : null;
-  const groupName = group ? group.name : 'Unknown group';
+  const groupName = d ? tenantGroupNameFromDeployment(d) || 'Unknown group' : 'Unknown group';
   const surveyName = d ? d.name : 'Unknown survey';
   let deployedAtText = d && d.deployedAt ? new Date(d.deployedAt).toLocaleString() : 'Unknown';
   if (d) {
     const siblings = deployed
       .map((item, idx) => ({ ...item, globalIndex: idx }))
-      .filter(item => item.groupIndex === d.groupIndex && item.name === d.name)
+      .filter(item => deploymentSameTenantAndSurvey(item, d))
       .sort((a, b) => new Date(a.deployedAt) - new Date(b.deployedAt));
     const ordinal = siblings.findIndex(item => item.globalIndex === globalIndex) + 1;
     if (ordinal > 0 && siblings.length > 0) {
@@ -526,7 +961,7 @@ function getDeploymentNumber(globalIndex) {
   if (!d) return '';
   const siblings = deployed
     .map((item, idx) => ({ ...item, globalIndex: idx }))
-    .filter(item => item.groupIndex === d.groupIndex && item.name === d.name)
+    .filter(item => deploymentSameTenantAndSurvey(item, d))
     .sort((a, b) => new Date(a.deployedAt) - new Date(b.deployedAt));
   const deploymentNumber = siblings.findIndex(item => item.globalIndex === globalIndex) + 1;
   return deploymentNumber > 0 ? String(deploymentNumber) : '';
@@ -552,16 +987,14 @@ function getInviteDeploymentMeta(deployedText) {
 
 function buildGeneratedInvites(emails, useOtp) {
   const nowIso = new Date().toISOString();
-  return emails.map(email => {
-    const uid = Math.random().toString(36).slice(2, 10);
-    return {
-      email,
-      link: 'https://surveys.app/s/' + uid,
-      otp: useOtp ? Math.random().toString(36).slice(2, 7).toUpperCase() : '',
-      status: 'Pending',
-      lastActivityAt: nowIso
-    };
-  });
+  // TODO: persist real magic links from the surveys API once invite creation moves server-side.
+  return emails.map(email => ({
+    email,
+    link: '',
+    otp: useOtp ? Math.random().toString(36).slice(2, 7).toUpperCase() : '',
+    status: 'Pending',
+    lastActivityAt: nowIso
+  }));
 }
 
 function persistInvites(globalIndex, generatedInvites, saveEmail) {
@@ -579,11 +1012,33 @@ function persistInvites(globalIndex, generatedInvites, saveEmail) {
   saveDeployed(deployed);
 }
 
-function markInvitesSent(globalIndex) {
+function mergeInviteSendResults(globalIndex, recipientsOrder, sentItems, failedItems) {
   const deployed = getDeployed();
-  if (globalIndex === null || !deployed[globalIndex] || !deployed[globalIndex].invites) return;
+  if (globalIndex === null || !deployed[globalIndex]) return;
+  const sentMap = new Map((sentItems || []).map(s => [s.email, s.link]));
+  const failEmails = new Set((failedItems || []).map(f => f.email));
   const nowIso = new Date().toISOString();
-  deployed[globalIndex].invites = deployed[globalIndex].invites.map(i => ({ ...i, status: 'Sent', lastActivityAt: nowIso }));
+  const invites = deployed[globalIndex].invites || [];
+  for (let i = 0; i < invites.length && i < recipientsOrder.length; i++) {
+    const req = recipientsOrder[i];
+    if (sentMap.has(req.email)) {
+      invites[i] = {
+        ...invites[i],
+        email: invites[i].email || req.email,
+        link: sentMap.get(req.email) || '',
+        status: 'Sent',
+        lastActivityAt: nowIso
+      };
+    } else if (failEmails.has(req.email)) {
+      invites[i] = {
+        ...invites[i],
+        email: invites[i].email || req.email,
+        status: 'Send failed',
+        lastActivityAt: nowIso
+      };
+    }
+  }
+  deployed[globalIndex].invites = invites;
   saveDeployed(deployed);
 }
 
@@ -609,30 +1064,35 @@ function renderInviteBreadcrumbs(role, groupName, surveyName, deploymentNumber) 
 
 function renderInviteLanding(role) {
   if (currentInviteDeploymentIndex !== null && getDeployed()[currentInviteDeploymentIndex]) return;
-  const group = getGroups()[currentGroupIndex];
-  const groupName = group ? group.name : 'Unknown group';
+  const ws = getCurrentWorkspaceGroup();
+  const groupName = ws ? ws.name : 'Unknown group';
   renderInviteBreadcrumbs(role, groupName, '', '');
   document.getElementById('sc-invite-deployed-at').textContent = '';
   document.getElementById('invite-context-text').textContent = '';
 }
 
-function openInviteShared(globalIndex, role) {
-  userRole = role;
+function openInviteShared(globalIndex, mode) {
+  if (mode === 'admin') {
+    if (!assertJwtRole(['super_admin'])) return;
+  } else {
+    if (!assertJwtRole(['survey_creator', 'survey_runner'])) return;
+  }
+  const jwtRole = getJwtRole();
   currentInviteDeploymentIndex = globalIndex;
   const { groupName, surveyName, deployedAtText } = getDeploymentContext(globalIndex);
-  renderInviteBreadcrumbs(role, groupName, surveyName, getDeploymentNumber(globalIndex));
+  renderInviteBreadcrumbs(mode === 'admin' ? 'super_admin' : jwtRole, groupName, surveyName, getDeploymentNumber(globalIndex));
   const { deployedAtLine, deploymentLabel } = getInviteDeploymentMeta(deployedAtText);
   document.getElementById('invite-context-text').textContent = `${surveyName}${deploymentLabel}`;
   document.getElementById('sc-invite-deployed-at').textContent = `Deployed at: ${deployedAtLine}`;
-  navigateToPage(role === 'super_admin' ? 'sa-invite' : 'sc-invite');
+  navigateToPage(mode === 'admin' ? 'sa-invite' : 'sc-invite');
 }
 
 function openInvite(globalIndex) {
-  openInviteShared(globalIndex, userRole);
+  openInviteShared(globalIndex, 'staff');
 }
 
 function openInviteAdmin(globalIndex) {
-  openInviteShared(globalIndex, 'super_admin');
+  openInviteShared(globalIndex, 'admin');
 }
 
 function generateLinks() {
@@ -643,7 +1103,7 @@ function generateLinks() {
   const saveEmail = document.getElementById('opt-save-email').checked;
   const generatedInvites = buildGeneratedInvites(emails, useOtp);
   document.getElementById('invite-links-body').innerHTML = generatedInvites.map(i =>
-    `<tr><td>${i.email}</td><td>${i.link}</td><td>${i.otp}</td><td>${i.status}</td></tr>`
+    `<tr><td>${i.email}</td><td>${i.otp}</td><td>${i.status}</td></tr>`
   ).join('');
   persistInvites(currentInviteDeploymentIndex, generatedInvites, saveEmail);
   document.getElementById('send-btn').textContent = 'Send ' + emails.length + ' email' + (emails.length !== 1 ? 's' : '') + ' now';
@@ -653,11 +1113,63 @@ function generateLinks() {
   document.getElementById('invite-results').style.display = '';
 }
 
-function sendEmails() {
-  document.querySelectorAll('#invite-links-body tr').forEach(row => { row.cells[3].textContent = 'Sent'; });
-  markInvitesSent(currentInviteDeploymentIndex);
-  document.getElementById('send-btn').disabled = true;
-  document.getElementById('send-btn').textContent = 'Sent';
+async function sendEmails() {
+  if (!assertJwtRole(['super_admin', 'survey_creator', 'survey_runner'])) return;
+  if (!window.JwtStaticAuth || !window.JwtStaticAuth.authFetch) {
+    window.alert('Auth client missing; load auth-client.js.');
+    return;
+  }
+  const btn = document.getElementById('send-btn');
+  const rows = document.querySelectorAll('#invite-links-body tr');
+  const recipients = Array.from(rows).map(row => ({
+    email: row.cells[0].textContent.trim(),
+    otp: row.cells[1].textContent.trim()
+  }));
+  if (!recipients.length) return;
+  btn.disabled = true;
+  const prevLabel = btn.textContent;
+  btn.textContent = 'Sending…';
+  try {
+    const res = await window.JwtStaticAuth.authFetch('/invite/send-participant-emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipients })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 503) {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+      const d = data.detail;
+      window.alert(typeof d === 'string' ? d : 'Send unavailable (service not configured).');
+      return;
+    }
+    if (!res.ok) {
+      btn.disabled = false;
+      btn.textContent = prevLabel;
+      const d = data.detail;
+      const msg = typeof d === 'string' ? d : (Array.isArray(d) ? d.map(e => e.msg || JSON.stringify(e)).join('; ') : 'Send failed');
+      window.alert(msg);
+      return;
+    }
+    mergeInviteSendResults(currentInviteDeploymentIndex, recipients, data.sent || [], data.failed || []);
+    const sentSet = new Set((data.sent || []).map(s => s.email));
+    const failSet = new Set((data.failed || []).map(f => f.email));
+    rows.forEach((row, idx) => {
+      const email = recipients[idx] && recipients[idx].email;
+      if (sentSet.has(email)) row.cells[2].textContent = 'Sent';
+      else if (failSet.has(email)) row.cells[2].textContent = 'Send failed';
+    });
+    const anyFailed = (data.failed || []).length > 0;
+    btn.disabled = true;
+    btn.textContent = anyFailed ? 'Done' : 'Sent';
+    if (anyFailed) {
+      window.alert('Some sends failed:\n' + (data.failed || []).map(f => `${f.email}: ${f.detail || ''}`).join('\n'));
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = prevLabel;
+    window.alert(e && e.message ? e.message : 'Network error');
+  }
 }
 
 function openParticipantMagicLink(link) {
@@ -713,4 +1225,5 @@ function updateInviteByLink(link, updater, onFoundDeployment) {
 
 // Init
 seedData();
-openSharedLogin('super_admin', 'flow1');
+openSharedLogin();
+refreshFlowNavState();

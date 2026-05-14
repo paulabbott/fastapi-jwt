@@ -8,33 +8,34 @@
 </head>
 <body>
 <p class="version-label">v7</p>
+<p class="v7-auth-hint">Staff screens are gated by the JWT <code>role</code> from FastAPI <code>POST /auth/login</code> (same origin). Log in once; the <strong>active flow</strong> (which nav strip is highlighted) follows your role: <code>super_admin</code> → Flow 1, <code>survey_creator</code> → Flow 2, <code>survey_runner</code> → Flow 3.</p>
 
 <p><button class="reset-seed-btn" onclick="resetDemoData()">0. Reset seed data</button></p>
 
 <div class="flow-label">Flow 1 — Super Admin</div>
 <nav id="nav-flow1">
-  <button onclick="openSharedLogin('super_admin', 'flow1')">1. Login</button>
-  <button onclick="openRolePage('sa-overview', 'super_admin', 'flow1')">2. Overview</button>
-  <button onclick="openRolePage('sa-super-admins', 'super_admin', 'flow1')">3. Super admins</button>
-  <button onclick="openRolePage('sa-group-detail', 'super_admin', 'flow1')">4. Group</button>
-  <button onclick="openRolePage('sa-invite', 'super_admin', 'flow1')">5. Invite</button>
-  <button onclick="openRolePage('sa-tracking', 'super_admin', 'flow1')">6. Tracking</button>
+  <button onclick="openSharedLogin()">1. Login</button>
+  <button onclick="openRolePage('sa-overview')">2. Overview</button>
+  <button onclick="openRolePage('sa-super-admins')">3. Super admins</button>
+  <button onclick="openRolePage('sa-group-detail')">4. Group</button>
+  <button onclick="openRolePage('sa-invite')">5. Invite</button>
+  <button onclick="openRolePage('sa-tracking')">6. Tracking</button>
 </nav>
 
 <div class="flow-label">Flow 2 — Survey Creator (Create, Edit, Deploy, Invite)</div>
 <nav id="nav-flow2">
-  <button onclick="openSharedLogin('survey_creator', 'flow2')">7. Login</button>
-  <button onclick="openRoleFlowPage('sc-group-detail', 'survey_creator', 'flow2')">8. Dashboard</button>
-  <button onclick="openRoleFlowPage('sc-invite', 'survey_creator', 'flow2')">9. Invite</button>
-  <button onclick="openRoleFlowPage('sc-tracking', 'survey_creator', 'flow2')">10. Tracking</button>
+  <button onclick="openSharedLogin()">7. Login</button>
+  <button onclick="openRoleFlowPage('sc-group-detail')">8. Dashboard</button>
+  <button onclick="openRoleFlowPage('sc-invite')">9. Invite</button>
+  <button onclick="openRoleFlowPage('sc-tracking')">10. Tracking</button>
 </nav>
 
 <div class="flow-label">Flow 3 — Survey Runner (Deploy, Invite)</div>
 <nav id="nav-flow3">
-  <button onclick="openSharedLogin('survey_runner', 'flow3')">11. Login</button>
-  <button onclick="openRoleFlowPage('sc-group-detail', 'survey_runner', 'flow3')">12. Dashboard</button>
-  <button onclick="openRoleFlowPage('sc-invite', 'survey_runner', 'flow3')">13. Invite</button>
-  <button onclick="openRoleFlowPage('sc-tracking', 'survey_runner', 'flow3')">14. Tracking</button>
+  <button onclick="openSharedLogin()">11. Login</button>
+  <button onclick="openRoleFlowPage('sc-group-detail')">12. Dashboard</button>
+  <button onclick="openRoleFlowPage('sc-invite')">13. Invite</button>
+  <button onclick="openRoleFlowPage('sc-tracking')">14. Tracking</button>
 </nav>
 
 <div class="flow-label">Flow 4 — Participant</div>
@@ -52,10 +53,11 @@
 <div id="page-sa-login">
   <h1>Login</h1>
   <label>Email</label><br>
-  <input type="email" placeholder="user@pollen.co"><br><br>
+  <input id="sa-login-email" type="email" placeholder="user@pollen.co" autocomplete="username"><br><br>
   <label>Password</label><br>
-  <input type="password" placeholder="••••••••"><br><br>
-  <button onclick="navigateToPage('sa-overview')">Continue</button>
+  <input id="sa-login-password" type="password" placeholder="••••••••" autocomplete="current-password"><br><br>
+  <p id="sa-login-error" style="color:#b00020;min-height:1.25em"></p>
+  <button type="button" onclick="submitSaLogin()">Continue</button>
 </div>
 
 <!-- F1: Global overview -->
@@ -76,7 +78,7 @@
     <span id="sa-group-crumb"></span>
   </p>
   <h2 id="sa-group-title">Group</h2>
-  <p><button onclick="navigateToPage('sa-group-admins')">Survey Admins</button></p>
+  <p><button onclick="navigateToPage('sa-group-admins')">Survey creators & runners</button></p>
   <h3>Deployed surveys</h3>
   <table border="1" cellpadding="6" cellspacing="0">
     <thead><tr><th>Survey</th><th>Deployment</th><th>Age</th><th>Status</th><th>Invited</th><th>Responses</th><th>Tracked</th><th></th><th></th><th></th><th></th><th></th></tr></thead>
@@ -94,7 +96,7 @@
 <!-- F1: Group survey admins -->
 <div id="page-sa-group-admins" style="display:none">
   <p class="breadcrumbs" id="group-admins-breadcrumbs"></p>
-  <h3>group admins</h3>
+  <h3>Survey creators & runners</h3>
   <p><button onclick="navigateToPage('sa-add-group-user')">+ Add user</button></p>
   <table border="1" cellpadding="6" cellspacing="0">
     <thead><tr><th>Email</th><th>Role</th><th></th></tr></thead>
@@ -111,25 +113,30 @@
 <div id="page-sa-add-group" style="display:none">
   <p><button onclick="navigateToPage('sa-overview')">← Groups</button></p>
   <h2>Add group</h2>
+  <p class="compact-meta">Creates a tenant group with <code>POST /auth/admin/groups</code> only (saved on the server). The overview table reloads names from <code>GET /auth/admin/groups</code>.</p>
   <hr>
   <label>Group name</label><br>
   <input type="text" id="sa-co-name" placeholder="Acme Ltd"><br><br>
-  <button onclick="addGroup()">Add group</button>
+  <button type="button" onclick="void addGroup()">Add group</button>
 </div>
 
 <!-- F1: Add group user -->
 <div id="page-sa-add-group-user" style="display:none">
-  <p><button onclick="navigateToPage('sa-group-admins')">← Survey Admins</button></p>
+  <p><button onclick="navigateToPage('sa-group-admins')">← Survey creators & runners</button></p>
   <h2 id="sa-add-user-title">Add user</h2>
+  <p class="compact-meta">Creates a staff account with <code>POST /auth/admin/users</code> (<strong>super_admin</strong> JWT only). Password must meet API rules (min 8 characters).</p>
+  <p id="sa-tenant-group-hint" class="compact-meta"></p>
   <hr>
   <label>Email</label><br>
-  <input type="email" id="sa-cu-email" placeholder="user@example.com"><br><br>
+  <input type="email" id="sa-cu-email" placeholder="user@example.com" autocomplete="username"><br><br>
+  <label>Password</label><br>
+  <input type="password" id="sa-cu-password" placeholder="••••••••" autocomplete="new-password"><br><br>
   <label>Role</label><br>
   <select id="sa-cu-role">
     <option value="survey_creator">survey_creator</option>
     <option value="survey_runner">survey_runner</option>
   </select><br><br>
-  <button onclick="addGroupUser()">Add user</button>
+  <button type="button" onclick="void addGroupUser()">Add user</button>
 </div>
 
 <!-- F1: Super admins -->
@@ -140,9 +147,12 @@
     <span>Super admins</span>
   </p>
   <h2>Super admins</h2>
-  <label>Email</label><br>
-  <input type="email" id="new-sa-email" placeholder="user@pollen.co">
-  <button onclick="addSuperAdmin()">Add super admin</button>
+  <p class="compact-meta">List from <code>GET /auth/super-admins</code> (same <code>group</code> as your JWT). Add uses <code>POST /auth/admin/users</code> with role <code>super_admin</code> and the Global Admin group id (the row with <code>is_super_admin_group: true</code> from <code>GET /auth/admin/groups</code>).</p>
+  <label for="new-sa-email">Username (email)</label><br>
+  <input type="email" id="new-sa-email" placeholder="user@pollen.co" autocomplete="username"><br><br>
+  <label for="new-sa-password">Password</label><br>
+  <input type="password" id="new-sa-password" placeholder="••••••••" autocomplete="new-password"><br><br>
+  <button type="button" onclick="void addSuperAdmin()">Add super admin</button>
   <table border="1" cellpadding="6" cellspacing="0">
     <thead><tr><th>Email</th><th></th></tr></thead>
     <tbody id="superadmins-body"></tbody>
@@ -154,19 +164,20 @@
 <!-- F2: Login (shared by Flows 1, 2, and 3) -->
 <div id="page-sc-login" style="display:none">
   <h1>Login</h1>
-  <p id="sc-login-role-label">Role: super_admin</p>
+  <p id="sc-login-role-label">Use any staff account; your JWT role selects the active flow after login.</p>
   <label>Email</label><br>
-  <input type="email" placeholder="creator@meridian.com"><br><br>
+  <input id="sc-login-email" type="email" placeholder="creator@meridian.com" autocomplete="username"><br><br>
   <label>Password</label><br>
-  <input type="password" placeholder="••••••••"><br><br>
-  <button onclick="continueFromSharedLogin()">Continue</button>
+  <input id="sc-login-password" type="password" placeholder="••••••••" autocomplete="current-password"><br><br>
+  <p id="sc-login-error" style="color:#b00020;min-height:1.25em"></p>
+  <button type="button" onclick="submitSharedLogin()">Continue</button>
 </div>
 
 <!-- F2: Group detail (shared by Flows 2 and 3) -->
 <div id="page-sc-group-detail" style="display:none">
   <p class="breadcrumbs"><span id="sc-group-title">Meridian Research Group</span> / <span>Dashboard</span></p>
   <h2>Dashboard</h2>
-  <p id="sc-group-admins-row"><button onclick="navigateToPage('sa-group-admins')">add group admins</button></p>
+  <p id="sc-group-admins-row"><button onclick="navigateToPage('sa-group-admins')">Survey creators & runners</button></p>
   <h3>Deployed surveys</h3>
   <table border="1" cellpadding="6" cellspacing="0">
     <thead><tr><th>Survey</th><th>Deployment</th><th>Age</th><th>Status</th><th>Invited</th><th>Responses</th><th>Tracked</th><th></th><th></th><th></th><th></th><th></th></tr></thead>
@@ -195,13 +206,14 @@ david@example.com
 eve@example.com</textarea><br><br>
   <label><input type="checkbox" id="opt-otp"> Add OTP password</label><br>
   <label><input type="checkbox" id="opt-save-email"> Track email address against links</label><br><br>
-  <button onclick="generateLinks()">Generate links</button>
+  <button onclick="generateLinks()">Generate recipients</button>
 
   <div id="invite-results" style="display:none">
     <div id="links-section" style="display:none">
-      <h3>Links</h3>
+      <h3>Recipients</h3>
+      <p class="compact-meta">Magic links are generated on the server when you send (PoC). TODO: return real links from the surveys API.</p>
       <table border="1" cellpadding="6" cellspacing="0">
-        <thead><tr><th>Email</th><th>Magic link</th><th>OTP</th><th>Status</th></tr></thead>
+        <thead><tr><th>Email</th><th>OTP</th><th>Status</th></tr></thead>
         <tbody id="invite-links-body"></tbody>
       </table>
     </div>
@@ -214,7 +226,7 @@ Hi,
 
 You've been invited to take part in a survey. Click the link below to begin:
 
-[magic link]
+[magic link is inserted by the server when sending]
 
 Your one time password is: [OTP]
 
@@ -223,7 +235,7 @@ This link is unique to you. Please do not share it.
 Thanks,
 The Survey Team</textarea>
     <br>
-    <button id="send-btn" onclick="sendEmails()" style="display:none">Send 0 emails now</button>
+    <button id="send-btn" onclick="void sendEmails()" style="display:none">Send 0 emails now</button>
   </div>
 </div>
 
@@ -242,9 +254,9 @@ The Survey Team</textarea>
   <hr>
   <p><button onclick="deleteTrackedEmails()">Delete all email addresses</button></p>
   <table border="1" cellpadding="6" cellspacing="0">
-    <thead><tr><th>Email</th><th>Magic link</th><th>OTP</th><th>Status</th><th>Last activity</th></tr></thead>
+    <thead><tr><th>Email</th><th>OTP</th><th>Status</th><th>Last activity</th></tr></thead>
     <tbody id="tracking-emails-body">
-      <tr><td colspan="5">No invites yet</td></tr>
+      <tr><td colspan="4">No invites yet</td></tr>
     </tbody>
   </table>
 </div>
@@ -278,6 +290,7 @@ The Survey Team</textarea>
   <button onclick="submitParticipantSurvey('https://surveys.app/s/xdcf530k')">Submit</button>
 </div>
 
+<script src="./js/auth-client.js"></script>
 <script src="./v7.seed.js"></script>
 <script src="./v7.js"></script>
 </body>
