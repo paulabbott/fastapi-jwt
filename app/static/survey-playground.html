@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Survey API Playground</title>
+    <style>
+      body { font-family: Arial, sans-serif; max-width: 900px; margin: 1.5rem auto; padding: 0 1rem; }
+      h1 { margin-bottom: 0.25rem; }
+      .muted { color: #666; font-size: 0.95rem; }
+      .row { margin-bottom: 0.75rem; }
+      label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
+      input, button, textarea { font-size: 1rem; padding: 0.45rem; }
+      input, textarea { width: 100%; box-sizing: border-box; }
+      button { cursor: pointer; margin: 0.25rem 0.35rem 0.25rem 0; }
+      textarea { min-height: 120px; font-family: ui-monospace, monospace; }
+      #output { min-height: 200px; }
+      section { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+      h2 { margin-top: 0; font-size: 1.1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Survey API Playground</h1>
+    <p class="muted">
+      In-memory Survey API matching <code>contracts/surveyApi.ts</code>. This service is separate from the
+      <a href="/playground">JWT Playground</a>: every request (including answer submission) needs an
+      <code>Authorization: Bearer</code> token issued by your Survey platform / third-party IdP. For local
+      dev, set <code>SURVEY_API_BEARER_TOKEN</code> in the environment and paste that same value here.
+    </p>
+
+    <section>
+      <h2>Connection</h2>
+      <div class="row">
+        <label for="baseUrl">API base (leave empty for same origin)</label>
+        <input id="baseUrl" type="text" placeholder="" />
+      </div>
+      <div class="row">
+        <label for="token">Survey API Bearer token (not the app JWT)</label>
+        <textarea id="token" rows="2" placeholder="Value of SURVEY_API_BEARER_TOKEN or your provider's access token"></textarea>
+      </div>
+    </section>
+
+    <section>
+      <h2>Surveys</h2>
+      <div class="row">
+        <label for="surveyTitle">Title</label>
+        <input id="surveyTitle" type="text" value="Demo survey" />
+      </div>
+      <div class="row">
+        <label for="surveyJson">survey_json</label>
+        <textarea id="surveyJson">{"pages": []}</textarea>
+      </div>
+      <div class="row">
+        <label for="surveyId">survey_id</label>
+        <input id="surveyId" type="text" placeholder="from create response" />
+      </div>
+      <button type="button" id="btnListSurveys">GET /surveys</button>
+      <button type="button" id="btnCreateSurvey">POST /surveys</button>
+      <button type="button" id="btnGetSurvey">GET /surveys/{id}</button>
+      <button type="button" id="btnSurveyMeta">GET /surveys/{id}/metadata</button>
+      <button type="button" id="btnUpdateSurvey">PUT /surveys/{id}</button>
+      <button type="button" id="btnDeleteSurvey">DELETE /surveys/{id}</button>
+    </section>
+
+    <section>
+      <h2>Deploys</h2>
+      <div class="row">
+        <label for="deployId">deploy_id</label>
+        <input id="deployId" type="text" placeholder="from create deploy" />
+      </div>
+      <button type="button" id="btnListDeploys">GET /surveys/{id}/deploys</button>
+      <button type="button" id="btnCreateDeploy">POST /surveys/{id}/deploys</button>
+      <button type="button" id="btnGetDeploy">GET /deploys/{id}</button>
+      <button type="button" id="btnDeployMeta">GET /deploys/{id}/metadata</button>
+      <button type="button" id="btnStop">PUT /deploys/{id}/stop</button>
+      <button type="button" id="btnResume">PUT /deploys/{id}/resume</button>
+      <button type="button" id="btnClose">PUT /deploys/{id}/close</button>
+      <button type="button" id="btnDeleteDeploy">DELETE /deploys/{id}</button>
+    </section>
+
+    <section>
+      <h2>Links</h2>
+      <div class="row">
+        <label for="linkCount">count (for POST .../links/{count})</label>
+        <input id="linkCount" type="number" value="3" min="1" />
+      </div>
+      <div class="row">
+        <label for="linkId">link_id</label>
+        <input id="linkId" type="text" placeholder="from create links" />
+      </div>
+      <button type="button" id="btnGetLinks">GET /deploys/{id}/links</button>
+      <button type="button" id="btnCreateLinks">POST /deploys/{id}/links/{count}</button>
+      <button type="button" id="btnDeleteLink">DELETE /deploys/{id}/links/{linkId}</button>
+    </section>
+
+    <section>
+      <h2>Answers</h2>
+      <div class="row">
+        <label for="answerJson">answer_json</label>
+        <textarea id="answerJson">{"completed": true}</textarea>
+      </div>
+      <button type="button" id="btnListAnswers">GET /deploys/{id}/answers</button>
+      <button type="button" id="btnSubmitAnswer">POST /deploys/{id}/answers</button>
+      <button type="button" id="btnSubmitAnswerLink">POST /deploys/{id}/answers/{linkId}</button>
+      <div class="row">
+        <label for="answerId">answer_id (for delete)</label>
+        <input id="answerId" type="text" placeholder="from submit response" />
+      </div>
+      <button type="button" id="btnDeleteAnswer">DELETE /answers/{id}</button>
+    </section>
+
+    <section>
+      <h2>Output</h2>
+      <textarea id="output" readonly></textarea>
+    </section>
+
+    <script src="/static/js/survey-api-playground.js"></script>
+  </body>
+</html>

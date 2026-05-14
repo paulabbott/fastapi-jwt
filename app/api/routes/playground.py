@@ -26,15 +26,44 @@ def jwt_playground() -> str:
       @media (min-width: 800px) {
         .two-col { grid-template-columns: 1fr 1fr; }
       }
+      .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.65rem; }
+      .actions > button { margin-right: 0; }
+      .create-user-group {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.35rem 0.5rem;
+        padding: 0.2rem 0.55rem 0.2rem 0.45rem;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        background: #f8f8f8;
+      }
+      .create-user-group label {
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: #333;
+        margin: 0;
+        white-space: nowrap;
+      }
+      .create-user-group select {
+        font-size: 1rem;
+        padding: 0.45rem 0.35rem;
+        min-width: 10.5rem;
+      }
+      .create-user-group button { margin-right: 0; }
+      .playground-links { margin-top: -0.35rem; margin-bottom: 1rem; font-size: 0.95rem; }
+      .playground-links a { color: #0b57d0; }
+      .playground-links a:visited { color: #5c2d91; }
     </style>
   </head>
   <body>
     <h1>FastAPI JWT Playground</h1>
-    <p class="muted">Use this page to register/login and call protected endpoints.</p>
+    <p class="muted">No public registration. Use <code>POST /auth/bootstrap</code> once (empty user store) to create the first <code>super_admin</code> and the <strong>Global Admin</strong> group, then log in. Further users need <code>POST /auth/admin/users</code> with a <code>super_admin</code> JWT and a valid <code>group</code> id (use <code>GET /auth/admin/groups</code>).</p>
+    <p class="muted playground-links"><a href="/static/v7.html">Survey Builder v7</a> — static demo served from <code>/static/</code> for manual testing alongside this page.</p>
 
     <div class="row">
-      <label for="username">Username</label>
-      <input id="username" placeholder="testuser" />
+      <label for="username">Username (email)</label>
+      <input id="username" placeholder="you@example.com" />
     </div>
 
     <div class="row">
@@ -42,12 +71,26 @@ def jwt_playground() -> str:
       <input id="password" type="password" placeholder="testpass123" />
     </div>
 
-    <div class="row">
-      <button id="registerBtn">Register</button>
-      <button id="loginBtn">Login</button>
-      <button id="usersBtn">List users</button>
-      <button id="protectedBtn">Call /protected</button>
-      <button id="clearBtn">Clear token</button>
+    <div class="row actions">
+      <button id="bootstrapBtn" type="button">Bootstrap first super_admin</button>
+      <button id="loginBtn" type="button">Login</button>
+      <span class="create-user-group" title="Uses JWT in the box below; must be super_admin">
+        <label for="newUserRole">Role</label>
+        <select id="newUserRole">
+          <option value="super_admin">super_admin</option>
+          <option value="survey_creator" selected>survey_creator</option>
+          <option value="survey_runner">survey_runner</option>
+        </select>
+        <label for="newUserGroup">Group</label>
+        <select id="newUserGroup" title="Load with a super_admin JWT (login first)">
+          <option value="">(load groups)</option>
+        </select>
+        <button id="loadGroupsBtn" type="button">Load groups</button>
+        <button id="adminCreateBtn" type="button">Create user</button>
+      </span>
+      <button id="usersBtn" type="button">List users</button>
+      <button id="protectedBtn" type="button">Call /protected</button>
+      <button id="clearBtn" type="button">Clear token</button>
     </div>
 
     <div class="row two-col">
@@ -118,30 +161,67 @@ def jwt_playground() -> str:
         }
       }
 
-      async function postJson(url, payload) {
+      async function postJson(url, payload, extraHeaders) {
+        const headers = { "Content-Type": "application/json", ...(extraHeaders || {}) };
         const res = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(payload)
         });
         const data = await res.json().catch(() => ({}));
         return { status: res.status, data };
       }
 
-      document.getElementById("registerBtn").addEventListener("click", async () => {
-        const result = await postJson("/auth/register", credentialsPayload());
-        if (result.data.access_token) {
-          tokenEl.value = result.data.access_token;
-          refreshDecodedFromToken();
+      document.getElementById("bootstrapBtn").addEventListener("click", async () => {
+        const result = await postJson("/auth/bootstrap", credentialsPayload(), {});
+        log("POST /auth/bootstrap", result);
+      });
+
+      async function loadGroupsIntoSelect(selectEl) {
+        const token = tokenEl.value.trim();
+        if (!token) {
+          log("GET /auth/admin/groups", { status: 0, data: "Set a JWT token first" });
+          return;
         }
-        log("POST /auth/register", result);
+        const res = await fetch("/auth/admin/groups", {
+          headers: { Authorization: "Bearer " + token }
+        });
+        const data = await res.json().catch(() => ({}));
+        log("GET /auth/admin/groups", { status: res.status, data });
+        if (!res.ok) return;
+        const list = data.groups || [];
+        selectEl.innerHTML = list.length
+          ? list.map((c) => `<option value="${String(c.id).replace(/"/g, "&quot;")}">${String(c.name).replace(/</g, "&lt;")}</option>`).join("")
+          : '<option value="">(no groups)</option>';
+      }
+
+      document.getElementById("loadGroupsBtn").addEventListener("click", async () => {
+        await loadGroupsIntoSelect(document.getElementById("newUserGroup"));
+      });
+
+      document.getElementById("adminCreateBtn").addEventListener("click", async () => {
+        const token = tokenEl.value.trim();
+        const role = document.getElementById("newUserRole").value;
+        const groupId = document.getElementById("newUserGroup").value;
+        if (!groupId) {
+          log("POST /auth/admin/users", { status: 0, data: "Pick a group (use Load groups)" });
+          return;
+        }
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const result = await postJson(
+          "/auth/admin/users",
+          { username: usernameEl.value.trim(), password: passwordEl.value, role, group: groupId },
+          headers
+        );
+        log("POST /auth/admin/users", result);
       });
 
       document.getElementById("loginBtn").addEventListener("click", async () => {
-        const result = await postJson("/auth/login", credentialsPayload());
+        const result = await postJson("/auth/login", credentialsPayload(), {});
         if (result.data.access_token) {
           tokenEl.value = result.data.access_token;
           refreshDecodedFromToken();
+          void loadGroupsIntoSelect(document.getElementById("newUserGroup"));
         }
         log("POST /auth/login", result);
       });
